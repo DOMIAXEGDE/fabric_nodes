@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "quadtree-fabric"
+version = "0.3.0"
+description = "Quadtree visual programming environment"
+requires-python = ">=3.12"
+dependencies = ["pygame>=3"]
+
+[project.optional-dependencies]
+c = []
+cpp = []
+python = []
+
+[project.entry-points."fabric_nodes.executors"]
+c = "runtime.plugins.c_exec"
+cpp = "runtime.plugins.cpp_exec"
+python = "runtime.plugins.python_exec"

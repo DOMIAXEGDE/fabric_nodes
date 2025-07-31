@@ -1,49 +1,93 @@
-import pygame
+import base64
+import io
 import json
 import os
 import sys
-import base64
-import io
 import tkinter as tk
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from tkinter import filedialog, simpledialog, colorchooser
+from typing import Any, Dict, List, Optional, Tuple, Union
+
+import pygame
+import pygame.freetype as ft
 from PIL import Image
 from dataclasses import dataclass, field
-from typing import Dict, List, Tuple, Optional, Any, Union
-from runtime.registry import ExecutorRegistry, TIMEOUT
 
-pygame.init()
+from runtime.registry import REGISTRY as REG
+from runtime.constants import TIMEOUT
+from config import CONFIG, MAIN_WIDTH
 
-# Constants
-SCREEN_WIDTH = 1280
-SCREEN_HEIGHT = 720
-SIDEBAR_WIDTH = 280
-MAIN_WIDTH = SCREEN_WIDTH - SIDEBAR_WIDTH
+# Thread pool for non-blocking TK dialogs
+DIALOG_POOL = ThreadPoolExecutor(max_workers=1)
 
-# Colors
-PRIMARY = (75, 83, 32)  # Army Green
-SECONDARY = (189, 183, 107)  # Dark Khaki
-ACCENT = (108, 117, 125)  # Slate Gray
-BG = (245, 245, 220)  # Beige
-SURFACE = (255, 255, 255)  # White
-TEXT = (51, 51, 51)  # Dark Gray
-CODE_BG = (247, 247, 240)  # Light Code Background
-CODE_NUM = (144, 144, 144)  # Line Number Gray
-GRID_COLOR = (204, 204, 204)  # Grid lines
-BUTTON_HOVER = (219, 213, 137)  # Lighter version of SECONDARY
+# Initialize freetype fonts
+ft.init()
+FONT_BASE = ft.SysFont(None, 14)
+FONT_HEADER = ft.SysFont(None, 20, bold=True)
+FONT_MONO = ft.SysFont("Courier New", 12)
+FONT_MONO_BOLD = ft.SysFont("Courier New", 14, bold=True)
 
-# Fonts
-pygame.font.init()
-FONT_BASE = pygame.font.SysFont("Arial", 14)
-FONT_HEADER = pygame.font.SysFont("Arial", 20, bold=True)
-FONT_MONO = pygame.font.SysFont("Courier New", 12)
-FONT_MONO_BOLD = pygame.font.SysFont("Courier New", 14, bold=True)
+# Screen and color shortcuts
+SCREEN_WIDTH, SCREEN_HEIGHT = CONFIG["screen"]
+SIDEBAR_WIDTH = CONFIG["sidebar"]
+colors = CONFIG["col"]
+PRIMARY = colors["primary"]
+SECONDARY = colors["secondary"]
+ACCENT = colors["accent"]
+BG = colors["bg"]
+SURFACE = colors["surface"]
+TEXT = colors["text"]
+CODE_BG = colors["code_bg"]
+CODE_NUM = colors["code_num"]
+GRID_COLOR = colors["grid"]
+BUTTON_HOVER = colors["hover"]
 
-# Global executor registry
-REG = ExecutorRegistry()
-REG.load_plugins()
+# --- TK dialog helpers -----------------------------------------------------
+def _tk_save_png():
+    root = tk.Tk()
+    root.withdraw()
+    path = filedialog.asksaveasfilename(
+        title="Export PNG", defaultextension=".png",
+        filetypes=[("PNG files", "*.png")],
+    )
+    root.destroy()
+    return path
 
-PLUGIN_TEMPLATE = '''from runtime.registry import TIMEOUT
+def _tk_open_json():
+    root = tk.Tk(); root.withdraw()
+    path = filedialog.askopenfilename(
+        title="Import Matrix", filetypes=[("JSON files", "*.json")]
+    )
+    root.destroy()
+    return path
+
+def _tk_save_json():
+    root = tk.Tk(); root.withdraw()
+    path = filedialog.asksaveasfilename(
+        title="Export Matrix", defaultextension=".json",
+        filetypes=[("JSON files", "*.json")]
+    )
+    root.destroy()
+    return path
+
+def _tk_input_ctx():
+    root = tk.Tk(); root.withdraw()
+    val = simpledialog.askstring("New Context", "Enter context ID:")
+    root.destroy()
+    return val
+
+def _tk_open_image():
+    root = tk.Tk(); root.withdraw()
+    path = filedialog.askopenfilename(
+        title="Select Image",
+        filetypes=[("Image files", "*.png;*.jpg;*.jpeg;*.gif;*.bmp")],
+    )
+    root.destroy()
+    return path
+
+# Global executor registry comes from runtime.registry
+PLUGIN_TEMPLATE = '''from runtime.constants import TIMEOUT
 
 def _exec(code:str):
     """Return (success:boolean, output:str)"""
@@ -54,7 +98,7 @@ def register(reg):
     reg.register("my_lang", _exec)
 '''
 
-def wrap_text(text: str, font: pygame.font.Font, max_px: int) -> list[str]:
+def wrap_text(text: str, font: ft.Font, max_px: int) -> list[str]:
     """Return a list of substrings that each fit inside max_px."""
     words = text.expandtabs(4).split(" ")
     lines, buf = [], ""
@@ -71,13 +115,13 @@ def wrap_text(text: str, font: pygame.font.Font, max_px: int) -> list[str]:
     return lines
 
 
-@dataclass
+@dataclass(slots=True)
 class Layer:
     size: int
     nodes: List[int] = field(default_factory=list)
 
 
-@dataclass
+@dataclass(slots=True)
 class Matrix:
     quadtree_size: int
     max_depth: int
@@ -563,8 +607,7 @@ class QuadtreeMatrix:
     def load_json(self, filepath: str) -> Optional[str]:
         """Load matrix from JSON file and return the assigned context ID"""
         try:
-            with open(filepath, 'r') as f:
-                data = json.load(f)
+            data = json.loads(Path(filepath).read_text(encoding="utf-8"))
             
             # Basic validation
             if not all(key in data for key in ['quadtree_size', 'max_depth', 'layers']):
@@ -588,7 +631,7 @@ class QuadtreeMatrix:
                 matrix.layers.append(layer)
             
             # Create context ID from filename
-            ctx_id = os.path.basename(filepath).replace('.json', '')
+            ctx_id = Path(filepath).stem
             if ctx_id in self.contexts:
                 base_id = ctx_id
                 counter = 1
@@ -625,8 +668,7 @@ class QuadtreeMatrix:
             })
         
         try:
-            with open(filepath, 'w') as f:
-                json.dump(data, f, indent=2)
+            Path(filepath).write_text(json.dumps(data, indent=2), encoding="utf-8")
             return True
         except Exception as e:
             print(f"Error saving JSON: {e}")
@@ -1087,8 +1129,14 @@ class OutputModal:
 
 class QuadtreeApp:
     """Main application class"""
-    
+
     def __init__(self):
+        pygame.init()
+        ft.init()
+        import atexit
+        atexit.register(pygame.quit)
+        atexit.register(ft.quit)
+
         self.screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
         pygame.display.set_caption("Quadtree Matrix Editor")
         
@@ -1112,10 +1160,12 @@ class QuadtreeApp:
         # Initialize modals
         self.code_editor = CodeEditorModal(SCREEN_WIDTH, SCREEN_HEIGHT)
         self.output_modal = OutputModal(SCREEN_WIDTH, SCREEN_HEIGHT)
-        
+
         # State
         self.dragging = False
         self.hover_pos = None
+        self.dialog_future = None
+        self._dialog_handler = None
     
     def setup_ui(self):
         # Context section
@@ -1193,88 +1243,75 @@ class QuadtreeApp:
         self.context_menu = None
     
     def new_context_action(self):
-        # Create a popup to ask for context ID
-        root = tk.Tk()
-        root.withdraw()
-        ctx_id = simpledialog.askstring("New Context", "Enter context ID:")
-        root.destroy()
-        
-        if ctx_id:
-            self.matrix.create_new_context(ctx_id, self.quadtree_size, self.max_depth)
-            self.matrix.current_ctx = ctx_id
-            
-            # Update dropdown
-            self.context_dropdown.options = self.matrix.get_context_list()
-            self.context_dropdown.selected = ctx_id
-        
+        if self.dialog_future:
+            return False
+
+        def handler(ctx_id):
+            if ctx_id:
+                self.matrix.create_new_context(ctx_id, self.quadtree_size, self.max_depth)
+                self.matrix.current_ctx = ctx_id
+                self.context_dropdown.options = self.matrix.get_context_list()
+                self.context_dropdown.selected = ctx_id
+
+        self._dialog_handler = handler
+        self.dialog_future = DIALOG_POOL.submit(_tk_input_ctx)
         return True
     
     def import_context_action(self):
-        root = tk.Tk()
-        root.withdraw()
-        filepath = filedialog.askopenfilename(
-            title="Import Matrix",
-            filetypes=[("JSON files", "*.json")]
-        )
-        root.destroy()
-        
-        if filepath:
-            ctx_id = self.matrix.load_json(filepath)
-            if ctx_id:
-                self.matrix.current_ctx = ctx_id
-                
-                # Update UI to match imported matrix
-                matrix = self.matrix.contexts[ctx_id]
-                self.quadtree_size = matrix.quadtree_size
-                self.size_input.text = str(self.quadtree_size)
-                
-                # Update depth slider
-                self.max_depth = matrix.max_depth
-                self.depth_slider.max = self.max_depth
-                
-                # Update dropdown
-                self.context_dropdown.options = self.matrix.get_context_list()
-                self.context_dropdown.selected = ctx_id
-        
+        if self.dialog_future:
+            return False
+
+        def handler(filepath):
+            if filepath:
+                ctx_id = self.matrix.load_json(filepath)
+                if ctx_id:
+                    self.matrix.current_ctx = ctx_id
+
+                    matrix = self.matrix.contexts[ctx_id]
+                    self.quadtree_size = matrix.quadtree_size
+                    self.size_input.text = str(self.quadtree_size)
+
+                    self.max_depth = matrix.max_depth
+                    self.depth_slider.max = self.max_depth
+
+                    self.context_dropdown.options = self.matrix.get_context_list()
+                    self.context_dropdown.selected = ctx_id
+
+        self._dialog_handler = handler
+        self.dialog_future = DIALOG_POOL.submit(_tk_open_json)
         return True
     
     def export_context_action(self):
         if not self.matrix.current_ctx:
             return False
-            
-        root = tk.Tk()
-        root.withdraw()
-        filepath = filedialog.asksaveasfilename(
-            title="Export Matrix",
-            defaultextension=".json",
-            filetypes=[("JSON files", "*.json")]
-        )
-        root.destroy()
-        
-        if filepath:
-            self.matrix.save_json(self.matrix.current_ctx, filepath)
-        
+
+        if self.dialog_future:
+            return False
+
+        def handler(filepath):
+            if filepath:
+                self.matrix.save_json(self.matrix.current_ctx, filepath)
+
+        self._dialog_handler = handler
+        self.dialog_future = DIALOG_POOL.submit(_tk_save_json)
         return True
     
     def export_png_action(self):
         if not self.matrix.current_ctx:
             return False
-            
+
         # Render current view to surface
         self.render_quadtree()
-        
-        root = tk.Tk()
-        root.withdraw()
-        filepath = filedialog.asksaveasfilename(
-            title="Export PNG",
-            defaultextension=".png",
-            filetypes=[("PNG files", "*.png")]
-        )
-        root.destroy()
-        
-        if filepath:
-            pygame.image.save(self.canvas, filepath)
 
+        if self.dialog_future:
+            return False
+
+        def handler(filepath):
+            if filepath:
+                pygame.image.save(self.canvas, filepath)
+
+        self._dialog_handler = handler
+        self.dialog_future = DIALOG_POOL.submit(_tk_save_png)
         return True
 
     def new_executor_action(self):
@@ -1380,28 +1417,24 @@ class QuadtreeApp:
                 self.output_modal.show(output, success)
         
         elif action == "add_image":
-            root = tk.Tk()
-            root.withdraw()
-            filepath = filedialog.askopenfilename(
-                title="Select Image",
-                filetypes=[("Image files", "*.png;*.jpg;*.jpeg;*.gif;*.bmp")]
-            )
-            root.destroy()
-            
-            if filepath:
-                try:
-                    with open(filepath, "rb") as f:
-                        img_data = f.read()
-                    
-                    # Convert to base64 for storage
-                    b64_data = base64.b64encode(img_data).decode('utf-8')
-                    
-                    matrix.payload_pool[f"{d}:{idx}"] = {
-                        'type': 'image',
-                        'data': b64_data
-                    }
-                except Exception as e:
-                    print(f"Error loading image: {e}")
+            if self.dialog_future:
+                return False
+
+            def handler(filepath):
+                if filepath:
+                    try:
+                        img_data = Path(filepath).read_bytes()
+                        b64_data = base64.b64encode(img_data).decode('utf-8')
+                        matrix.payload_pool[f"{d}:{idx}"] = {
+                            'type': 'image',
+                            'data': b64_data
+                        }
+                    except Exception as e:
+                        print(f"Error loading image: {e}")
+
+            self._dialog_handler = handler
+            self.dialog_future = DIALOG_POOL.submit(_tk_open_image)
+            return True
         
         elif action == "subdivide":
             if d < matrix.max_depth:
@@ -1492,7 +1525,7 @@ class QuadtreeApp:
                     
                     # Render text
                     font_size = int(cell_size * 0.3)
-                    font = pygame.font.SysFont("Arial", max(12, min(font_size, 36)))
+                    font = ft.SysFont(None, max(12, min(font_size, 36)))
                     text_surf = font.render(text, True, color)
                     
                     # Center text
@@ -1509,7 +1542,7 @@ class QuadtreeApp:
                     if cell_size < 100:
                         # Small cell, just show code symbol
                         font_size = int(cell_size * 0.5)
-                        font = pygame.font.SysFont("Courier New", max(12, min(font_size, 36)), bold=True)
+                        font = ft.SysFont("Courier New", max(12, min(font_size, 36)), bold=True)
                         text_surf = font.render("{ }", True, (51, 51, 51))
                         
                         # Center text
@@ -1550,7 +1583,7 @@ class QuadtreeApp:
                         pygame.draw.rect(self.canvas, (234, 234, 234), (x + 2, y + 2, line_num_width, cell_size - 4))
 
                         # --- wrapped code rendering ---
-                        font          = pygame.font.SysFont("Courier New", int(line_height * 0.75))
+                        font          = ft.SysFont("Courier New", int(line_height * 0.75))
                         line_idx      = 0
                         y_pos         = y + padding
                         for raw_line in code_lines:
@@ -1678,9 +1711,8 @@ class QuadtreeApp:
                     if not fname.endswith(".py"):
                         fname += ".py"
                     p = Path("runtime/plugins") / fname
-                    with open(p, "w", encoding="utf-8") as f:
-                        f.write(code)
-                    REG.hot_reload()
+                    p.write_text(code, encoding="utf-8")
+                    REG.tick()
             elif cell and self.matrix.current_ctx:
                 d, idx = cell
                 self.matrix.contexts[self.matrix.current_ctx].payload_pool[f"{d}:{idx}"] = {
@@ -1785,11 +1817,16 @@ class QuadtreeApp:
     
     def update(self, dt):
         """Update game state"""
-        pass
+        if self.dialog_future and self.dialog_future.done():
+            result = self.dialog_future.result()
+            if self._dialog_handler:
+                self._dialog_handler(result)
+            self.dialog_future = None
+            self._dialog_handler = None
     
     def draw(self):
         """Draw the application"""
-        REG.hot_reload()
+        REG.tick()
         # Clear screen
         self.screen.fill(SURFACE)
         
@@ -1851,5 +1888,13 @@ class QuadtreeApp:
             self.draw()
 
 if __name__ == "__main__":
+    from argparse import ArgumentParser
+
+    parser = ArgumentParser()
+    parser.add_argument("--width", type=int, default=CONFIG["screen"][0])
+    parser.add_argument("--height", type=int, default=CONFIG["screen"][1])
+    args = parser.parse_args()
+    CONFIG["screen"] = (args.width, args.height)
+
     app = QuadtreeApp()
     app.run()

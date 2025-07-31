@@ -1,17 +1,22 @@
-import subprocess, tempfile, textwrap, importlib, pkgutil, sys, os, time
-from pathlib import Path
+import importlib
+import importlib.metadata as md
+import time
 from types import ModuleType
-from typing import Callable, Dict, Tuple
+from typing import Callable, Dict, Tuple, Optional
+
+from runtime.constants import ENTRYPOINT_GROUP
 
 ExecutorFn = Callable[[str], Tuple[bool, str]]
-PLUGIN_DIR = Path(__file__).parent / "plugins"
-TIMEOUT = 5  # seconds – one place to change it!
+_THROTTLE = 0.25  # seconds
+
 
 class ExecutorRegistry:
-    """Global store for all language executors."""
+    """Global store for language executors."""
+
     def __init__(self) -> None:
         self._exec: Dict[str, ExecutorFn] = {}
-        PLUGIN_DIR.mkdir(parents=True, exist_ok=True)
+        self._last_tick = 0.0
+        self._discover()
 
     # ---------- public API ----------
     def register(self, lang: str, fn: ExecutorFn) -> None:
@@ -26,36 +31,32 @@ class ExecutorRegistry:
     def has(self, lang: str) -> bool:
         return lang.lower() in self._exec
 
+    def get(self, lang: str) -> Optional[ExecutorFn]:
+        return self._exec.get(lang.lower())
+
     def execute(self, code: str, lang: str) -> Tuple[bool, str]:
-        fn = self._exec.get(lang.lower())
+        fn = self.get(lang)
         if not fn:
-            return False, f"No executor for {lang}. Create one from the ➕ menu!"
+            return False, f"No executor for {lang}. Install a plugin."
         return fn(code)
 
-    # ---------- plugin loading ----------
-    def load_plugins(self) -> None:
-        """Import every *.py in plugins/ that defines `register`."""
-        for mod_info in pkgutil.iter_modules([str(PLUGIN_DIR)]):
-            full = f"runtime.plugins.{mod_info.name}"
+    # ---------- discovery ----------
+    def _discover(self) -> None:
+        for ep in md.entry_points(group=ENTRYPOINT_GROUP):
+            if ep.name in self._exec:
+                continue
             try:
-                mod = importlib.import_module(full)
+                mod: ModuleType = ep.load()
                 if hasattr(mod, "register"):
                     mod.register(self)
             except Exception as e:
-                print(f"[plugins] {full} failed: {e}")
+                print(f"[exec] {ep.name} failed: {e}")
 
-    def hot_reload(self) -> None:
-        """Re-import any plugin whose mtime has changed."""
-        for mod in list(sys.modules.values()):
-            if getattr(mod, "__file__", ""):
-                p = Path(mod.__file__)
-                if PLUGIN_DIR in p.parents and p.suffix == ".py":
-                    mtime = p.stat().st_mtime
-                    if mtime > getattr(mod, "__loaded_mtime__", 0):
-                        try:
-                            importlib.reload(mod)
-                            mod.__loaded_mtime__ = mtime
-                            print(f"[plugins] reloaded {p.name}")
-                        except Exception as e:
-                            print(f"[plugins] reload {p.name} failed: {e}")
+    def tick(self) -> None:
+        now = time.perf_counter()
+        if now - self._last_tick > _THROTTLE:
+            self._discover()
+            self._last_tick = now
 
+
+REGISTRY = ExecutorRegistry()
