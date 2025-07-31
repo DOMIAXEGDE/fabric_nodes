@@ -14,7 +14,8 @@ import pygame.freetype as ft
 from PIL import Image
 from dataclasses import dataclass, field
 
-from runtime.registry import ExecutorRegistry, TIMEOUT
+from runtime.registry import REGISTRY as REG
+from runtime.constants import TIMEOUT
 from config import CONFIG, MAIN_WIDTH
 
 # Thread pool for non-blocking TK dialogs
@@ -85,11 +86,8 @@ def _tk_open_image():
     root.destroy()
     return path
 
-# Global executor registry
-REG = ExecutorRegistry()
-REG.load_plugins()
-
-PLUGIN_TEMPLATE = '''from runtime.registry import TIMEOUT
+# Global executor registry comes from runtime.registry
+PLUGIN_TEMPLATE = '''from runtime.constants import TIMEOUT
 
 def _exec(code:str):
     """Return (success:boolean, output:str)"""
@@ -1714,7 +1712,7 @@ class QuadtreeApp:
                         fname += ".py"
                     p = Path("runtime/plugins") / fname
                     p.write_text(code, encoding="utf-8")
-                    REG.hot_reload()
+                    REG.tick()
             elif cell and self.matrix.current_ctx:
                 d, idx = cell
                 self.matrix.contexts[self.matrix.current_ctx].payload_pool[f"{d}:{idx}"] = {
@@ -1828,7 +1826,7 @@ class QuadtreeApp:
     
     def draw(self):
         """Draw the application"""
-        REG.hot_reload()
+        REG.tick()
         # Clear screen
         self.screen.fill(SURFACE)
         
