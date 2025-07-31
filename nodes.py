@@ -1,19 +1,16 @@
 import pygame
 import json
 import os
-import importlib
-import importlib.util
 import sys
-import subprocess
 import base64
 import io
-import tempfile
 import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, simpledialog, colorchooser
 from PIL import Image
 from dataclasses import dataclass, field
 from typing import Dict, List, Tuple, Optional, Any, Union
+from runtime.registry import ExecutorRegistry, TIMEOUT
 
 pygame.init()
 
@@ -41,6 +38,21 @@ FONT_BASE = pygame.font.SysFont("Arial", 14)
 FONT_HEADER = pygame.font.SysFont("Arial", 20, bold=True)
 FONT_MONO = pygame.font.SysFont("Courier New", 12)
 FONT_MONO_BOLD = pygame.font.SysFont("Courier New", 14, bold=True)
+
+# Global executor registry
+REG = ExecutorRegistry()
+REG.load_plugins()
+
+PLUGIN_TEMPLATE = '''from runtime.registry import TIMEOUT
+
+def _exec(code:str):
+    """Return (success:boolean, output:str)"""
+    # example: simply echo the code
+    return True, code
+
+def register(reg):
+    reg.register("my_lang", _exec)
+'''
 
 def wrap_text(text: str, font: pygame.font.Font, max_px: int) -> list[str]:
     """Return a list of substrings that each fit inside max_px."""
@@ -75,16 +87,19 @@ class Matrix:
 
 
 class Button:
-    def __init__(self, x, y, width, height, text, action=None, font=FONT_BASE):
+    def __init__(self, x, y, width, height, text, action=None, font=FONT_BASE, disabled=False):
         self.rect = pygame.Rect(x, y, width, height)
         self.text = text
         self.action = action
         self.font = font
         self.hovered = False
         self.pressed = False
+        self.disabled = disabled
 
     def draw(self, surface):
-        if self.pressed:
+        if self.disabled:
+            color = ACCENT
+        elif self.pressed:
             color = SECONDARY
         else:
             color = BUTTON_HOVER if self.hovered else PRIMARY
@@ -96,10 +111,13 @@ class Button:
         surface.blit(text_surf, text_rect)
 
     def check_hover(self, pos):
-        self.hovered = self.rect.collidepoint(pos)
+        self.hovered = self.rect.collidepoint(pos) and not self.disabled
         return self.hovered
 
     def handle_event(self, event):
+        if self.disabled:
+            return False
+
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
             if self.rect.collidepoint(event.pos):
                 self.pressed = True
@@ -509,67 +527,6 @@ class Modal:
         return False
 
 
-class CodeExecutor:
-    """Handles execution of code in different languages"""
-    
-    def __init__(self):
-        self.extension_map = {
-            "python": ".py",
-            "javascript": ".js",
-            "c": ".c",
-            "cpp": ".cpp",
-            "java": ".java",
-            "html": ".html",
-        }
-        
-        self.executor_map = {
-            "python": self.execute_python,
-        }
-        
-        # Ensure tmp directory exists
-        self.tmp_dir = os.path.join(tempfile.gettempdir(), "quadtree_code")
-        os.makedirs(self.tmp_dir, exist_ok=True)
-    
-    def execute(self, code: str, language: str) -> Tuple[bool, str]:
-        """Execute code in the given language"""
-        executor = self.executor_map.get(language.lower())
-        if executor:
-            return executor(code)
-        else:
-            return False, f"No executor available for {language}. Would you like to create one?"
-    
-    def execute_python(self, code: str) -> Tuple[bool, str]:
-        """Execute Python code"""
-        # Save code to temporary file
-        temp_file = os.path.join(self.tmp_dir, f"temp_{hash(code)}.py")
-        with open(temp_file, "w", encoding="utf-8") as f:
-            f.write(code)
-        
-        try:
-            # Execute in subprocess to capture output and isolate errors
-            result = subprocess.run(
-                [sys.executable, temp_file],
-                capture_output=True,
-                text=True,
-                timeout=5  # 5 second timeout
-            )
-            
-            # Clean up temp file
-            try:
-                os.remove(temp_file)
-            except:
-                pass
-                
-            if result.returncode == 0:
-                return True, result.stdout
-            else:
-                return False, f"Error:\n{result.stderr}"
-        except subprocess.TimeoutExpired:
-            return False, "Execution timed out (5s limit)"
-        except Exception as e:
-            return False, f"Execution error: {str(e)}"
-
-
 class QuadtreeMatrix:
     """Main class for quadtree matrix operations"""
     
@@ -577,7 +534,7 @@ class QuadtreeMatrix:
         self.contexts = {}
         self.current_ctx = ""
         self.active_cell = None
-        self.code_executor = CodeExecutor()
+        self.code_executor = REG
         
     def create_empty_matrix(self, size: int, max_depth: int) -> Matrix:
         """Create a new empty matrix with the given size and depth"""
@@ -701,6 +658,8 @@ class CodeEditorModal:
         self.selection_start = 0
         self.selecting = False
 
+        self.is_plugin = False
+
         # --- CURSOR BLINKING ---
         self.cursor_timer = 0
         self.cursor_visible = True
@@ -737,19 +696,22 @@ class CodeEditorModal:
         
         # Language input
         self.language_label = "Language:"
-        self.language_input = TextInput(
+        self.language_dropdown = DropDown(
             self.rect.x + 100,
             self.rect.bottom - button_height - margin,
             150,
             button_height,
-            "python"
+            REG.list_languages()
         )
+        self.language_dropdown.selected = "python"
     
-    def show(self, code="", language="python", cell=None):
+    def show(self, code="", language="python", cell=None, plugin=False):
         self.visible = True
         self.code = code
         self.language = language
-        self.language_input.text = language
+        self.language_dropdown.options = REG.list_languages()
+        self.language_dropdown.selected = language
+        self.is_plugin = plugin
         self.cell = cell
         self.cursor_pos = len(code)
         self.scroll_y = 0
@@ -863,7 +825,8 @@ class CodeEditorModal:
         
         lang_label_surf = FONT_BASE.render(self.language_label, True, TEXT)
         surface.blit(lang_label_surf, (self.rect.x + 10, self.rect.bottom - 30 - lang_label_surf.get_height() // 2))
-        self.language_input.draw(surface)
+        self.language_dropdown.draw(surface)
+        self.execute_button.disabled = not REG.has(self.language_dropdown.selected)
         self.save_button.draw(surface)
         self.execute_button.draw(surface)
         self.cancel_button.draw(surface)
@@ -879,13 +842,13 @@ class CodeEditorModal:
                 button.check_hover(event.pos)
             result = button.handle_event(event)
             if result:
-                if button == self.save_button: return ('save', (self.code, self.language_input.text, self.cell))
-                elif button == self.execute_button: return ('execute', (self.code, self.language_input.text))
+                if button == self.save_button: return ('save', (self.code, self.language_dropdown.selected, self.cell))
+                elif button == self.execute_button: return ('execute', (self.code, self.language_dropdown.selected))
                 elif button == self.cancel_button:
                     self.hide()
                     return ('cancel', None)
 
-        self.language_input.handle_event(event)
+        self.language_dropdown.handle_event(event)
 
         # Define editor geometry, which is needed for event handling
         editor_rect = pygame.Rect(self.rect.x + 10, self.rect.y + 50, self.rect.width - 20, self.rect.height - 120)
@@ -1204,10 +1167,16 @@ class QuadtreeApp:
         # Export PNG button
         self.export_png_btn = Button(
             10, 260, SIDEBAR_WIDTH - 20, 30,
-            "Export PNG", 
+            "Export PNG",
             self.export_png_action
         )
-        
+
+        self.new_exec_btn = Button(
+            10, 300, SIDEBAR_WIDTH - 20, 30,
+            "➕ New Executor",
+            self.new_executor_action
+        )
+
         # All UI elements
         self.ui_elements = [
             self.context_dropdown,
@@ -1216,7 +1185,8 @@ class QuadtreeApp:
             self.export_ctx_btn,
             self.size_input,
             self.depth_slider,
-            self.export_png_btn
+            self.export_png_btn,
+            self.new_exec_btn
         ]
         
         # Context menu (will be populated when right-clicking)
@@ -1304,7 +1274,11 @@ class QuadtreeApp:
         
         if filepath:
             pygame.image.save(self.canvas, filepath)
-        
+
+        return True
+
+    def new_executor_action(self):
+        self.code_editor.show(PLUGIN_TEMPLATE, "python", plugin=True)
         return True
     
     def show_context_menu(self, position, cell):
@@ -1696,7 +1670,18 @@ class QuadtreeApp:
         
         if action == 'save':
             code, language, cell = data
-            if cell and self.matrix.current_ctx:
+            if self.code_editor.is_plugin:
+                root = tk.Tk(); root.withdraw()
+                fname = simpledialog.askstring("Plugin File", "Enter file name:")
+                root.destroy()
+                if fname:
+                    if not fname.endswith(".py"):
+                        fname += ".py"
+                    p = Path("runtime/plugins") / fname
+                    with open(p, "w", encoding="utf-8") as f:
+                        f.write(code)
+                    REG.hot_reload()
+            elif cell and self.matrix.current_ctx:
                 d, idx = cell
                 self.matrix.contexts[self.matrix.current_ctx].payload_pool[f"{d}:{idx}"] = {
                     'type': 'code',
@@ -1804,6 +1789,7 @@ class QuadtreeApp:
     
     def draw(self):
         """Draw the application"""
+        REG.hot_reload()
         # Clear screen
         self.screen.fill(SURFACE)
         
