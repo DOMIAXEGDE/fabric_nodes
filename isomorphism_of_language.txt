@@ -1,0 +1,125 @@
+17:13 01/08/2025
+Written by Dominic Alexander Cooper
+```
+Some expression of language has two types of lexicon. Object and relation.
+
+The languages definitional expression (E) has the following metrics.
+
+3 objects types, three relation types.
+
+Let O be the set of object_<type-id> elements. Where O = {object_1, object_2, object_3}
+Let R be the set of relation_<type-id> elements. Where R = {relation_4, relation_5, relation_6}
+
+Where the count of each lexicon type by id within the E, is given by:
+
+total count of object_1 in E is 4
+total count of object_2 in E is 1
+total count of object_3 in E is 3
+total count of relation_4 in E is 1
+total count of relation_5 in E is 1
+total count of relation_6 in E is 1
+
+With this well-defined language description, by its unknown E, create a standard C program to generate all possible forms of E, thereby creating the 'isomorphic' classification of this unknown, but well-described language.
+```
+End of written prompt by Dominic Alexander Cooper, see the conversation at, https://chatgpt.com/share/688ce8cf-c4b4-8003-ada7-cc81f0380f37
+
+Below is a small, self-contained C program that enumerates **every distinct sequence** of the multiset
+
+* `object_1 × 4`, `object_2 × 1`, `object_3 × 3`,
+* `relation_4 × 1`, `relation_5 × 1`, `relation_6 × 1`
+
+—that is, all possible forms of the expression **E** given only the token types and their counts. It uses backtracking on token *types* (not individual tokens), so it produces each sequence exactly once (your “isomorphic classification”).
+
+> Total sequences for these counts = 11! / (4!·3!) = **277,200**.
+
+### C program
+
+```c
+// generate_E.c
+// Enumerate all isomorphic forms of E from token-type counts.
+// Build:  gcc -O2 -std=c11 generate_E.c -o generate_E
+// Run:    ./generate_E > all_E.txt
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+typedef struct {
+    const char *name;   // token type name
+    int remaining;      // how many still to place
+} Sym;
+
+static FILE *OUT;
+
+static void dfs(Sym *syms, int m, const char **buf, int depth, int total,
+                unsigned long long *emitted)
+{
+    if (depth == total) {
+        (*emitted)++;
+        // Label each expression for convenience (E1, E2, ...)
+        fprintf(OUT, "E%llu: ", *emitted);
+        for (int i = 0; i < total; i++) {
+            if (i) fputc(' ', OUT);
+            fputs(buf[i], OUT);
+        }
+        fputc('\n', OUT);
+        return;
+    }
+
+    // Lexicographic by the order listed in the array
+    for (int i = 0; i < m; i++) {
+        if (syms[i].remaining > 0) {
+            buf[depth] = syms[i].name;
+            syms[i].remaining--;
+            dfs(syms, m, buf, depth + 1, total, emitted);
+            syms[i].remaining++;
+        }
+    }
+}
+
+int main(int argc, char **argv)
+{
+    // Optional: write to a file if given: ./generate_E output.txt
+    OUT = (argc >= 2) ? fopen(argv[1], "w") : stdout;
+    if (!OUT) { perror("fopen"); return 1; }
+
+    // Define the language's token types and counts here.
+    Sym syms[] = {
+        {"object_1",   4},
+        {"object_2",   1},
+        {"object_3",   3},
+        {"relation_4", 1},
+        {"relation_5", 1},
+        {"relation_6", 1}
+    };
+    const int m = (int)(sizeof(syms) / sizeof(syms[0]));
+
+    int total = 0;
+    for (int i = 0; i < m; i++) total += syms[i].remaining;
+
+    const char **buf = (const char **)malloc((size_t)total * sizeof(*buf));
+    if (!buf) { fputs("Out of memory\n", stderr); return 1; }
+
+    unsigned long long emitted = 0ULL;
+    dfs(syms, m, buf, 0, total, &emitted);
+
+    // Summary to stderr so it doesn't mix with the sequences when redirected
+    fprintf(stderr, "Generated %llu expressions of length %d.\n",
+            emitted, total);
+
+    free(buf);
+    if (OUT != stdout) fclose(OUT);
+    return 0;
+}
+```
+
+### Notes
+
+* The order of generation is lexicographic with respect to the order of the token types in the `syms` array. Reorder the entries if you want a different canonical listing.
+* To adapt to other languages, just change the names and counts in `syms[]`; the algorithm remains the same.
+* With the provided counts it prints **277,200** lines; redirect to a file as shown above.
+
+17:15 01/08/2025
+```
+Within each system, at least one language is true.
+```
