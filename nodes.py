@@ -10,7 +10,8 @@ from tkinter import filedialog, simpledialog, colorchooser
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import pygame
-import pygame.freetype as ft
+#import pygame.freetype as ft
+pygame.font.init()
 from PIL import Image
 from dataclasses import dataclass, field
 
@@ -20,13 +21,19 @@ from config import CONFIG, MAIN_WIDTH
 
 # Thread pool for non-blocking TK dialogs
 DIALOG_POOL = ThreadPoolExecutor(max_workers=1)
-
+"""
 # Initialize freetype fonts
 ft.init()
 FONT_BASE = ft.SysFont(None, 14)
 FONT_HEADER = ft.SysFont(None, 20, bold=True)
 FONT_MONO = ft.SysFont("Courier New", 12)
 FONT_MONO_BOLD = ft.SysFont("Courier New", 14, bold=True)
+"""
+# Initialize
+FONT_BASE   = pygame.font.SysFont(None, 14)
+FONT_HEADER = pygame.font.SysFont(None, 20, bold=True)
+FONT_MONO   = pygame.font.SysFont("Courier New", 12)
+FONT_MONO_BOLD = pygame.font.SysFont("Courier New", 14, bold=True)
 
 # Screen and color shortcuts
 SCREEN_WIDTH, SCREEN_HEIGHT = CONFIG["screen"]
@@ -98,7 +105,7 @@ def register(reg):
     reg.register("my_lang", _exec)
 '''
 
-def wrap_text(text: str, font: ft.Font, max_px: int) -> list[str]:
+def wrap_text(text: str, font: pygame.font.Font, max_px: int) -> list[str]:
     """Return a list of substrings that each fit inside max_px."""
     words = text.expandtabs(4).split(" ")
     lines, buf = [], ""
@@ -1132,10 +1139,10 @@ class QuadtreeApp:
 
     def __init__(self):
         pygame.init()
-        ft.init()
+        #ft.init()
         import atexit
         atexit.register(pygame.quit)
-        atexit.register(ft.quit)
+        #atexit.register(ft.quit)
 
         self.screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
         pygame.display.set_caption("Quadtree Matrix Editor")
@@ -1525,7 +1532,8 @@ class QuadtreeApp:
                     
                     # Render text
                     font_size = int(cell_size * 0.3)
-                    font = ft.SysFont(None, max(12, min(font_size, 36)))
+                    #font = ft.SysFont(None, max(12, min(font_size, 36)))
+                    font = pygame.font.SysFont(None, max(12, min(font_size, 36)))
                     text_surf = font.render(text, True, color)
                     
                     # Center text
@@ -1542,7 +1550,8 @@ class QuadtreeApp:
                     if cell_size < 100:
                         # Small cell, just show code symbol
                         font_size = int(cell_size * 0.5)
-                        font = ft.SysFont("Courier New", max(12, min(font_size, 36)), bold=True)
+                        #font = ft.SysFont("Courier New", max(12, min(font_size, 36)), bold=True)
+                        font = pygame.font.SysFont("Courier New", max(12, min(font_size, 36)), bold=True)
                         text_surf = font.render("{ }", True, (51, 51, 51))
                         
                         # Center text
@@ -1583,7 +1592,8 @@ class QuadtreeApp:
                         pygame.draw.rect(self.canvas, (234, 234, 234), (x + 2, y + 2, line_num_width, cell_size - 4))
 
                         # --- wrapped code rendering ---
-                        font          = ft.SysFont("Courier New", int(line_height * 0.75))
+                        #font         = ft.SysFont("Courier New", int(line_height * 0.75))
+                        font          = pygame.font.SysFont("Courier New", int(line_height * 0.75))
                         line_idx      = 0
                         y_pos         = y + padding
                         for raw_line in code_lines:
