@@ -1,0 +1,5 @@
+.\ctokenize_v2 stream --out stream.jsonl D:\file_dump\count_to_infinity.c
+.\ctokenize_v2 stats --out stats.json D:\file_dump\count_to_infinity.c
+.\ctokenize_v2 vocab --out vocab.tsv D:\file_dump\count_to_infinity.c
+.\ctokenize_v2 reassemble --in stream.jsonl --outdir recon
+# Produces recon/<original_name>.recon
