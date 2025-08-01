@@ -10,8 +10,10 @@ def _exec(code: str) -> tuple[bool, str]:
 
     def target():
         with contextlib.redirect_stdout(buf):
-            runpy.run_path("<string>", {}, code)
-
+            #runpy.run_path("<string>", {}, code)
+            # in runtime/plugins/python_exec.py, inside a 'target' function
+            exec(code, {'__name__': '__main__'})
+            
     t = threading.Thread(target=target)
     t.start()
     t.join(TIMEOUT)
